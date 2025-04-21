@@ -19,6 +19,14 @@ if "failed_attempts" not in st.session_state:
 if "lockout_until" not in st.session_state:
     st.session_state.lockout_until = None
 
+if "failed_retrieve_attempts" not in st.session_state:
+    st.session_state.failed_retrieve_attempts = 0
+if "lockout_retrieve_until" not in st.session_state:
+    st.session_state.lockout_retrieve_until = None
+if "post_lock_single_chance_used" not in st.session_state:
+    st.session_state.post_lock_single_chance_used = False
+
+
 # Encryption Key
 if not os.path.exists(KEY_FILE):
     with open(KEY_FILE, "wb") as f:
@@ -167,7 +175,6 @@ elif choice == "Retrieve Data":
         st.stop()
 
     st.subheader("🔍 Retrieve Your Data")
-
     user = st.session_state.user
     user_entries = stored_data.get(user, {})
 
@@ -176,6 +183,12 @@ elif choice == "Retrieve Data":
     else:
         selected_encrypted = st.selectbox("📄 Choose encrypted entry", list(user_entries.keys()))
         st.code(selected_encrypted)
+
+        # Check for lockout
+        if st.session_state.lockout_retrieve_until and datetime.now() < st.session_state.lockout_retrieve_until:
+            remaining = (st.session_state.lockout_retrieve_until - datetime.now()).seconds
+            st.warning(f"🔒 You are locked out. Try again in {remaining} seconds.")
+            st.stop()
 
         passkey = st.text_input("Enter your passkey", type="password")
 
@@ -186,10 +199,34 @@ elif choice == "Retrieve Data":
                     decrypted = decrypt_data(selected_encrypted)
                     st.success("✅ Decrypted Successfully")
                     st.text_area("Decrypted Data", decrypted, height=150)
+                    
+                    st.session_state.failed_retrieve_attempts = 0
+                    st.session_state.lockout_retrieve_until = None
+                    st.session_state.post_lock_single_chance_used = False
                 except:
                     st.error("⚠️ Decryption failed. Data may be corrupted.")
             else:
-                st.error("❌ Incorrect passkey.")
+                st.session_state.failed_retrieve_attempts += 1
+
+                # After lockout, allow only one chance
+                if st.session_state.lockout_retrieve_until and not st.session_state.post_lock_single_chance_used:
+                    st.session_state.post_lock_single_chance_used = True
+                    st.error("❌ Incorrect passkey. Last chance used.")
+                elif st.session_state.lockout_retrieve_until and st.session_state.post_lock_single_chance_used:
+                    st.session_state.lockout_retrieve_until = datetime.now() + timedelta(minutes=2)
+                    st.session_state.failed_retrieve_attempts = 0
+                    st.session_state.post_lock_single_chance_used = False
+                    st.warning("🔒 Locked again for 2 minutes due to failed retry.")
+                    st.stop()
+                elif st.session_state.failed_retrieve_attempts >= 3:
+                    st.session_state.lockout_retrieve_until = datetime.now() + timedelta(minutes=2)
+                    st.session_state.failed_retrieve_attempts = 0
+                    st.session_state.post_lock_single_chance_used = False
+                    st.warning("🔒 Too many failed attempts. Locked for 2 minutes.")
+                    st.stop()
+                else:
+                    attempts_left = 3 - st.session_state.failed_retrieve_attempts
+                    st.error(f"❌ Incorrect passkey. Attempts left: {attempts_left}")
 
 # Logout
 elif choice == "Logout":
